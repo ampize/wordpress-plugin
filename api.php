@@ -62,11 +62,13 @@ function get_items( $request ) {
   $orderBy = (isset($parameters["orderby"])) ? $parameters["orderby"] : "date";
   $tax_query = [];
   foreach ($filters as $key => $value) {
-    $tax_query[] = [
-      "taxonomy" => $key,
-      "field" => "slug",
-      "terms" => $value
-    ];
+    if (!empty($value)) {
+      $tax_query[] = [
+        "taxonomy" => $key,
+        "field" => "slug",
+        "terms" => $value
+      ];
+    }
   }
   $args = [
     "post_type" => "post",
@@ -87,7 +89,7 @@ function get_items( $request ) {
     }
   }
   $results = [
-    "numItems" => $query->found_posts,
+    "numItems" => (int) $query->found_posts,
     "numPages" => $query->max_num_pages,
     "pageSize" => $page_size,
     "currentPage" => $page,
@@ -99,6 +101,134 @@ function get_items( $request ) {
 function get_item( $data ) {
   $post = get_post($data["id"]);
   return get_post_data($post);
+}
+
+function get_model ( $data ) {
+    $model = [
+        "article" => [
+            "name" => "article",
+            "description" => "Article",
+            "schemaOrgType" => "Article",
+            "fields" => [
+                "id" => [
+                    "type" => "ID",
+                    "description" => "Article ID",
+                    "required" => true
+                ],
+                "headline" => [
+                    "type" => "String",
+                    "required" => true,
+                    "description" => "Article Title",
+                    "schemaOrgProperty" => "headline"
+                ],
+                "description" => [
+                    "type" => "String",
+                    "description" => "Article Description",
+                    "schemaOrgProperty" => "description"
+                ],
+                "image" => [
+                    "type" => "ImageURL",
+                    "description" => "Article Image",
+                    "schemaOrgProperty" => "image"
+                ],
+                "body" => [
+                    "type" => "html",
+                    "description" => "Article Body"
+                ],
+                "authorName" => [
+                    "type" => "String",
+                    "description" => "Article Author",
+                    "schemaOrgProperty" => "author.name"
+                ],
+                "datePublished" => [
+                    "type" => "DateTime",
+                    "description" => "Date Published",
+                    "schemaOrgProperty" => "datePublished"
+                ],
+                "dateModified" => [
+                    "type" => "DateTime",
+                    "description" => "Date Modified",
+                    "schemaOrgProperty" => "dateModified"
+                ],
+                "tags" => [
+                    "type" => "tag",
+                    "multivalued" => true
+                ],
+                "categories" => [
+                    "type" => "category",
+                    "multivalued" => true
+                ]
+            ],
+            "expose" => true,
+            "multiEndpoint" => [
+                "name" => "articles",
+                "args" => [
+                    "query" => [
+                      "type" => "String"
+                    ],
+                    "category" => [
+                        "type" => "String"
+                    ],
+                    "tag" => [
+                      "type" => "String"
+                    ]
+                ]
+            ],
+            "singleEndpoint" => [
+                "name" => "article",
+                "args" => [
+                    "id" => [
+                        "type" => "ID",
+                        "required" => true
+                    ]
+                ]
+            ],
+            "connector" => [
+                "configs" => [
+                    "startFieldName" => "page",
+                    "limitFieldName" => "pagesize",
+                    "orderByFieldName" => "orderby",
+                    "orderFieldName" => "order",
+                    "segment" => "articles",
+                    "detailSegment" => "article/{id}"
+                ]
+            ]
+        ],
+        "Filter" => [
+            "name" => "filter",
+            "fields" => [
+                "key" => [
+                    "type" => "String"
+                ],
+                "value" => [
+                    "type" => "String"
+                ]
+            ]
+        ],
+        "tag" => [
+            "name" => "tag",
+            "fields" => [
+                "name" => [
+                    "type" => "String"
+                ],
+                "filter" => [
+                    "type" => "Filter"
+                ]
+            ]
+        ],
+        "category" => [
+            "name" => "category",
+            "fields" => [
+                "name" => [
+                    "type" => "String"
+                ],
+                "filter" => [
+                    "type" => "Filter"
+                ]
+            ]
+        ]
+    ];
+    return $model;
 }
 
 function get_navigation( $data ) {
@@ -201,7 +331,6 @@ function get_post_data ($post) {
   */
   $result = [
     "id" => $post->ID,
-    "type" => "article",
     "headline" => $post->post_title,
     "description" => "Short article description",
     "image" =>  wp_get_attachment_url(get_post_thumbnail_id($post->ID),"thumbnail"),
@@ -220,6 +349,10 @@ add_action( "rest_api_init", function () {
     "methods" => "GET",
     "callback" => "get_site",
   ]);
+  register_rest_route( "ampize/v1", "/model", [
+    "methods" => "GET",
+    "callback" => "get_model",
+  ]);
   register_rest_route( "ampize/v1", "/pages", [
     "methods" => "GET",
     "callback" => "get_navigation",
@@ -237,7 +370,7 @@ add_action( "rest_api_init", function () {
 add_action("admin_menu", "test_plugin_setup_menu");
 
 function test_plugin_setup_menu(){
-        add_menu_page( "AMPize Plugin Page", "AMPize Plugin", "manage_options", "ampize-plugin", "ampize_admin" );
+  add_menu_page( "AMPize Plugin Page", "AMPize Plugin", "manage_options", "ampize-plugin", "ampize_admin" );
 }
 
 function ampize_admin(){

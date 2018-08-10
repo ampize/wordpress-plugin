@@ -8,6 +8,9 @@ Version: 0.1
 Author URI: http://www.ampize.me
 */
 
+require_once plugin_dir_path( __FILE__ ) . 'includes/UrlToQuery.php';
+require_once plugin_dir_path( __FILE__ ) . 'includes/UrlToQueryItem.php';
+
 function add_amp_link() {
     ?>
         <link rel="amphtml" href="https://www.example.com/url/to/amp/document.html">
@@ -53,49 +56,69 @@ function get_timezone() {
 
 function get_items( $request ) {
 
-  $parameters = $request->get_query_params();
-  $filters = (isset($parameters["filters"])) ? $parameters["filters"] : null;
-  $page_size = (isset($parameters["pagesize"])) ? $parameters["pagesize"] : 10;
-  $page = (isset($parameters["page"])) ? $parameters["page"] : 1;
-  $query = (isset($parameters["query"])) ? $parameters["query"] : null;
-  $order = (isset($parameters["order"])) ? $parameters["order"] : "DESC";
-  $orderBy = (isset($parameters["orderby"])) ? $parameters["orderby"] : "date";
-  $tax_query = [];
-  foreach ($filters as $key => $value) {
-    if (!empty($value)) {
-      $tax_query[] = [
-        "taxonomy" => $key,
-        "field" => "slug",
-        "terms" => $value
-      ];
+    $parameters = $request->get_query_params();
+    $filters = (isset($parameters["filters"])) ? json_decode($parameters["filters"],true) : [];
+    $start = (isset($parameters["start"])) ? $parameters["start"] : 0;
+    $limit = (isset($parameters["limit"])) ? $parameters["limit"] : 10;
+    $offset = (isset($parameters["offset"])) ? $parameters["offset"] : 0;
+    $query = (isset($parameters["query"])) ? $parameters["query"] : null;
+    $order = (isset($parameters["order"])) ? $parameters["order"] : "DESC";
+    $orderBy = (isset($parameters["orderby"])) ? $parameters["orderby"] : "date";
+    $tax_query = [];
+    list($page, $pageSize, $headWaste, $tailWaste) = getPageSize($start, $limit);
+    if (!empty($filters["scalarFilters"])) {
+        foreach ($filters["scalarFilters"] as $scalarFilter) {
+            if ($scalarFilter["field"] == "category" || $scalarFilter["field"] == "post_tag") {
+                if ($scalarFilter["operator"] == "eq") {
+                  $tax_query[] = [
+                    "taxonomy" => $scalarFilter["field"],
+                    "field" => "slug",
+                    "terms" => [$scalarFilter["value"]]
+                  ];
+                }
+            }
+        }
+    }
+    $args = [
+      "post_type" => "post",
+    	"tax_query" => $tax_query,
+      "posts_per_page" => $pageSize,
+      "paged" => $page,
+      "order" => $order,
+      "orderBy" => $orderBy
+    ];
+    if (isset($query)) $args["s"]=$query;
+    $query = new WP_Query( $args );
+    if (!$query->have_posts()) {
+      $items=null;
+    } else {
+      $items = [];
+      foreach ($query->posts as $post) {
+        $items[] = get_post_data($post);
+      }
+    }
+    $results = [
+      "numItems" => (int) $query->found_posts,
+      "numPages" => $query->max_num_pages,
+      "pageSize" => $pageSize,
+      "currentPage" => $page,
+      "items" => array_slice($items, $headWaste + $offset, count($items)-$headWaste-$offset-$tailWaste)
+    ];
+    return $results;
+}
+
+function getPageSize ($start, $limit) {
+  for ($window = $limit; $window <= $start + $limit; $window++) {
+    for ($leftShift = 0; $leftShift <= $window - $limit; $leftShift++) {
+      if (($start - $leftShift) % $window == 0) {
+        $pageSize = $window;
+        $page = ($start - $leftShift) / $pageSize;
+        $headWaste = $leftShift;
+        $tailWaste = (($page + 1) * $pageSize) - ($start + $limit);
+        return [$page+1, $pageSize, $headWaste, $tailWaste];
+      }
     }
   }
-  $args = [
-    "post_type" => "post",
-  	"tax_query" => $tax_query,
-    "posts_per_page" => $page_size,
-    "paged" => $page,
-    "order" => $order,
-    "orderBy" => $orderBy
-  ];
-  if (isset($query)) $args["s"]=$query;
-  $query = new WP_Query( $args );
-  if (!$query->have_posts()) {
-    $items=null;
-  } else {
-    $items = [];
-    foreach ($query->posts as $post) {
-      $items[] = get_post_data($post);
-    }
-  }
-  $results = [
-    "numItems" => (int) $query->found_posts,
-    "numPages" => $query->max_num_pages,
-    "pageSize" => $page_size,
-    "currentPage" => $page,
-    "items" => $items
-  ];
-  return $results;
 }
 
 function get_item( $data ) {
@@ -132,7 +155,7 @@ function get_model ( $data ) {
                     "schemaOrgProperty" => "image"
                 ],
                 "body" => [
-                    "type" => "html",
+                    "type" => "HTML",
                     "description" => "Article Body"
                 ],
                 "authorName" => [
@@ -189,19 +212,8 @@ function get_model ( $data ) {
                     "limitFieldName" => "pagesize",
                     "orderByFieldName" => "orderby",
                     "orderFieldName" => "order",
-                    "segment" => "articles",
-                    "detailSegment" => "article/{id}"
-                ]
-            ]
-        ],
-        "Filter" => [
-            "name" => "filter",
-            "fields" => [
-                "key" => [
-                    "type" => "String"
-                ],
-                "value" => [
-                    "type" => "String"
+                    "segment" => "wp-json/ampize/v1/items",
+                    "detailSegment" => "wp-json/ampize/v1/item/{id}"
                 ]
             ]
         ],
@@ -212,7 +224,10 @@ function get_model ( $data ) {
                     "type" => "String"
                 ],
                 "filter" => [
-                    "type" => "Filter"
+                    "type" => "String"
+                ],
+                "value" => [
+                    "type" => "String"
                 ]
             ]
         ],
@@ -223,7 +238,10 @@ function get_model ( $data ) {
                     "type" => "String"
                 ],
                 "filter" => [
-                    "type" => "Filter"
+                    "type" => "String"
+                ],
+                "value" => [
+                    "type" => "String"
                 ]
             ]
         ]
@@ -297,9 +315,8 @@ function get_post_data ($post) {
     foreach ($wp_categories as $term) {
       $categories[] = [
         "name" => $term->name,
-        "filter" => [
-          "category" => $term->slug
-        ]
+        "filter" => "category",
+        "value" => $term->slug
       ];
     }
   } else {
@@ -310,9 +327,8 @@ function get_post_data ($post) {
     foreach ($wp_tags as $term) {
       $tags[] = [
         "name" => $term->name,
-        "filter" => [
-          "post_tag" => $term->slug
-        ]
+        "filter" => "post_tag",
+        "value" => $term->slug
       ];
     }
   } else {
@@ -329,11 +345,12 @@ function get_post_data ($post) {
         ), $comments);
   var_dump($display);
   */
+  $image = wp_get_attachment_url(get_post_thumbnail_id($post->ID),"thumbnail");
   $result = [
     "id" => $post->ID,
     "headline" => $post->post_title,
     "description" => "Short article description",
-    "image" =>  wp_get_attachment_url(get_post_thumbnail_id($post->ID),"thumbnail"),
+    "image" =>  $image ? $image : null,
     "body" => $post->post_content,
     "authorName" => get_the_author_meta("display_name",$post->post_author),
     "datePublished" => $datePublished->format(DateTime::ISO8601),
@@ -342,6 +359,28 @@ function get_post_data ($post) {
     "tags" => $tags
   ];
   return $result;
+}
+
+function get_by_route($data) {
+  $resolver = new UrlToQuery();
+  $args = $resolver->resolve($data["route"]);
+  $query = new WP_Query( $args );
+  if (!$query->have_posts()) {
+    $items=null;
+  } else {
+    $items = [];
+    foreach ($query->posts as $post) {
+      $items[] = get_post_data($post);
+    }
+  }
+  $results = [
+    "numItems" => (int) $query->found_posts,
+    "numPages" => $query->max_num_pages,
+    "pageSize" => "",
+    "currentPage" => "",
+    "items" => $items
+  ];
+  return $results;
 }
 
 add_action( "rest_api_init", function () {
@@ -365,6 +404,10 @@ add_action( "rest_api_init", function () {
     "methods" => "GET",
     "callback" => "get_item",
   ]);
+  register_rest_route( "ampize/v1", "/route/(?P<route>.*)", [
+    "methods" => "GET",
+    "callback" => "get_by_route",
+  ]);
 });
 
 add_action("admin_menu", "test_plugin_setup_menu");
@@ -372,6 +415,8 @@ add_action("admin_menu", "test_plugin_setup_menu");
 function test_plugin_setup_menu(){
   add_menu_page( "AMPize Plugin Page", "AMPize Plugin", "manage_options", "ampize-plugin", "ampize_admin" );
 }
+
+
 
 function ampize_admin(){
   //must check that the user has the required capability

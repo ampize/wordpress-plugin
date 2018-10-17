@@ -10,14 +10,14 @@ Author URI: http://www.ampize.me
 
 require_once plugin_dir_path( __FILE__ ) . 'includes/UrlToQuery.php';
 require_once plugin_dir_path( __FILE__ ) . 'includes/UrlToQueryItem.php';
-
+/*
 function add_amp_link() {
     ?>
         <link rel="amphtml" href="https://www.example.com/url/to/amp/document.html">
     <?php
 }
 add_action("wp_head", "add_amp_link");
-
+*/
 function get_site() {
   if ( is_multisite() ) {
     return "Multisite installations are not supported in this plugin version";
@@ -55,8 +55,30 @@ function get_timezone() {
 }
 
 function get_items( $request ) {
-
     $parameters = $request->get_query_params();
+    if (isset($parameters["route"])) {
+      $resolver = new UrlToQuery();
+      $args = $resolver->resolve($parameters["route"]);
+      $page = (isset($parameters["page"])) ? $parameters["page"] : null;
+      if ($page) $args["paged"] = intval($page);
+      $query = new WP_Query( $args );
+      if (!$query->have_posts()) {
+        $items=null;
+      } else {
+        $items = [];
+        foreach ($query->posts as $post) {
+          $items[] = get_post_data($post);
+        }
+      }
+      $results = [
+        "numItems" => (int) $query->found_posts,
+        "numPages" => $query->max_num_pages,
+        "pageSize" => $args["posts_per_page"] ? $args["posts_per_page"] : intval(get_option( 'posts_per_page' )),
+        "currentPage" => (!is_null($args["paged"])) ? $args["paged"] : 1,
+        "items" => $items
+      ];
+      return $results;
+    }
     $filters = (isset($parameters["filters"])) ? json_decode($parameters["filters"],true) : [];
     $start = (isset($parameters["start"])) ? $parameters["start"] : 0;
     $limit = (isset($parameters["limit"])) ? $parameters["limit"] : 10;
@@ -154,6 +176,10 @@ function get_model ( $data ) {
                     "description" => "Article Image",
                     "schemaOrgProperty" => "image"
                 ],
+                "thumbnail" => [
+                    "type" => "ImageURL",
+                    "description" => "Article Thumbnail"
+                ],
                 "body" => [
                     "type" => "HTML",
                     "description" => "Article Body"
@@ -193,6 +219,9 @@ function get_model ( $data ) {
                         "type" => "String"
                     ],
                     "tag" => [
+                      "type" => "String"
+                    ],
+                    "route" => [
                       "type" => "String"
                     ]
                 ]
@@ -289,6 +318,7 @@ function get_navigation( $data ) {
       "description" => $page->description,
       "keywords" => "",
       "canonicalUrl" => $page->url,
+      "urlSegment" => parse_url($page->url)["path"]."?".parse_url($page->url)["query"],
       "isRoot" => ($page->menu_item_parent==0) ? true : false,
       "order" => $page->menu_order,
       "parentId" => $page->menu_item_parent,
@@ -299,7 +329,38 @@ function get_navigation( $data ) {
       "listFilters" => $listFilters
     ];
   }
-  return $results;
+  return ["pages" => $results];
+}
+
+function get_post_thumbnail ($post) {
+    if (!$img_id = get_post_thumbnail_id ($post->ID)) {
+      $attachments = get_children([
+        'post_parent' => $post->ID,
+        'post_type' => 'attachment',
+        'numberposts' => 1,
+        'post_mime_type' => 'image'
+      ]);
+      if (is_array($attachments)) {
+        foreach ($attachments as $a) {
+          $img_id = $a->ID;
+        }
+      }
+    }
+    if ($img_id) {
+      $image = wp_get_attachment_image_src($img_id);
+      return $image[0];
+    } else {
+      if ($img = preg_match_all('/<img.+src=[\'"]([^\'"]+)[\'"].*>/i', $post->post_content, $matches)) {
+        $image = $matches[1][0];
+        if (is_int($image)) {
+            $image = wp_get_attachment_image_src($image);
+            return $image[0];
+        } else {
+          return $image;
+        }
+      }
+    }
+    return false;
 }
 
 function get_post_data ($post) {
@@ -346,11 +407,17 @@ function get_post_data ($post) {
   var_dump($display);
   */
   $image = wp_get_attachment_url(get_post_thumbnail_id($post->ID),"thumbnail");
+
+  $thumbnail = get_post_thumbnail($post);
+
+  $description = get_the_excerpt($post);
+
   $result = [
     "id" => $post->ID,
     "headline" => $post->post_title,
-    "description" => "Short article description",
-    "image" =>  $image ? $image : null,
+    "description" => $description,
+    "image" => $image ? $image : null,
+    "thumbnail" => $thumbnail ? $thumbnail : null,
     "body" => $post->post_content,
     "authorName" => get_the_author_meta("display_name",$post->post_author),
     "datePublished" => $datePublished->format(DateTime::ISO8601),
@@ -359,28 +426,6 @@ function get_post_data ($post) {
     "tags" => $tags
   ];
   return $result;
-}
-
-function get_by_route($data) {
-  $resolver = new UrlToQuery();
-  $args = $resolver->resolve($data["route"]);
-  $query = new WP_Query( $args );
-  if (!$query->have_posts()) {
-    $items=null;
-  } else {
-    $items = [];
-    foreach ($query->posts as $post) {
-      $items[] = get_post_data($post);
-    }
-  }
-  $results = [
-    "numItems" => (int) $query->found_posts,
-    "numPages" => $query->max_num_pages,
-    "pageSize" => "",
-    "currentPage" => "",
-    "items" => $items
-  ];
-  return $results;
 }
 
 add_action( "rest_api_init", function () {
@@ -403,10 +448,6 @@ add_action( "rest_api_init", function () {
   register_rest_route( "ampize/v1", "/item/(?P<id>\d+)", [
     "methods" => "GET",
     "callback" => "get_item",
-  ]);
-  register_rest_route( "ampize/v1", "/route/(?P<route>.*)", [
-    "methods" => "GET",
-    "callback" => "get_by_route",
   ]);
 });
 

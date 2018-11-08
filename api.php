@@ -90,26 +90,27 @@ function get_items( $request ) {
     list($page, $pageSize, $headWaste, $tailWaste) = getPageSize($start, $limit);
     if (!empty($filters["scalarFilters"])) {
         foreach ($filters["scalarFilters"] as $scalarFilter) {
-            if ($scalarFilter["field"] == "category" || $scalarFilter["field"] == "tag") {
-                switch ($scalarFilter["field"]) {
-                    case "category":
-                        $taxonomy = "category";
-                        break;
-                    case "tag":
-                        $taxonomy = "post_tag";
-                        break;
-                    case "query":
-                        $taxonomy = NULL;
-                        $queryFilter = $scalarFilter["value"];
-                        break;
-                }
-                if (!is_null($taxonomy)) {
-                  $tax_query[] = [
-                    "taxonomy" => $taxonomy,
-                    "field" => "slug",
-                    "terms" => [$scalarFilter["value"]]
-                  ];
-                }
+            switch ($scalarFilter["field"]) {
+                case "category":
+                    $taxonomy = "category";
+                    break;
+                case "tag":
+                    $taxonomy = "post_tag";
+                    break;
+                case "query":
+                    $taxonomy = NULL;
+                    $queryFilter = $scalarFilter["value"];
+                    break;
+                default:
+                    $taxonomy = NULL;
+                    break;
+            }
+            if (!is_null($taxonomy)) {
+              $tax_query[] = [
+                "taxonomy" => $taxonomy,
+                "field" => "slug",
+                "terms" => [$scalarFilter["value"]]
+              ];
             }
         }
     }

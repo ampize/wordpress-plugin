@@ -83,17 +83,29 @@ function get_items( $request ) {
     $start = (isset($parameters["start"])) ? $parameters["start"] : 0;
     $limit = (isset($parameters["limit"])) ? $parameters["limit"] : 10;
     $offset = (isset($parameters["offset"])) ? $parameters["offset"] : 0;
-    $query = (isset($parameters["query"])) ? $parameters["query"] : null;
+    $queryFilter = (isset($parameters["query"])) ? $parameters["query"] : NULL;
     $order = (isset($parameters["order"])) ? $parameters["order"] : "DESC";
     $orderBy = (isset($parameters["orderby"])) ? $parameters["orderby"] : "date";
     $tax_query = [];
     list($page, $pageSize, $headWaste, $tailWaste) = getPageSize($start, $limit);
     if (!empty($filters["scalarFilters"])) {
         foreach ($filters["scalarFilters"] as $scalarFilter) {
-            if ($scalarFilter["field"] == "category" || $scalarFilter["field"] == "post_tag") {
-                if ($scalarFilter["operator"] == "eq") {
+            if ($scalarFilter["field"] == "category" || $scalarFilter["field"] == "tag") {
+                switch ($scalarFilter["field"]) {
+                    case "category":
+                        $taxonomy = "category";
+                        break;
+                    case "tag":
+                        $taxonomy = "post_tag";
+                        break;
+                    case "query":
+                        $taxonomy = NULL;
+                        $queryFilter = $scalarFilter["value"];
+                        break;
+                }
+                if (!is_null($taxonomy)) {
                   $tax_query[] = [
-                    "taxonomy" => $scalarFilter["field"],
+                    "taxonomy" => $taxonomy,
                     "field" => "slug",
                     "terms" => [$scalarFilter["value"]]
                   ];
@@ -109,7 +121,7 @@ function get_items( $request ) {
       "order" => $order,
       "orderBy" => $orderBy
     ];
-    if (isset($query)) $args["s"]=$query;
+    if (isset($queryFilter)) $args["s"]=$queryFilter;
     $query = new WP_Query( $args );
     if (!$query->have_posts()) {
       $items=null;

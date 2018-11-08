@@ -237,10 +237,6 @@ function get_model ( $data ) {
             ],
             "connector" => [
                 "configs" => [
-                    "startFieldName" => "page",
-                    "limitFieldName" => "pagesize",
-                    "orderByFieldName" => "orderby",
-                    "orderFieldName" => "order",
                     "segment" => "wp-json/ampize/v1/items",
                     "detailSegment" => "wp-json/ampize/v1/item/{id}"
                 ]

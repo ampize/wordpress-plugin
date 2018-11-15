@@ -56,9 +56,9 @@ function get_timezone() {
 
 function get_items( $request ) {
     $parameters = $request->get_query_params();
-    if (isset($parameters["route"])) {
+    if (isset($parameters["url"])) {
       $resolver = new UrlToQuery();
-      $args = $resolver->resolve($parameters["route"]);
+      $args = $resolver->resolve($parameters["url"]);
       $page = (isset($parameters["page"])) ? $parameters["page"] : null;
       if ($page) $args["paged"] = intval($page);
       $query = new WP_Query( $args );
@@ -67,7 +67,9 @@ function get_items( $request ) {
       } else {
         $items = [];
         foreach ($query->posts as $post) {
-          $items[] = get_post_data($post);
+          $item = get_post_data($post);
+          $item["views"] = intval(get_post_meta($post->ID, "ampize_views", true));
+          $items[] = $item;
         }
       }
       $results = [
@@ -84,8 +86,8 @@ function get_items( $request ) {
     $limit = (isset($parameters["limit"])) ? $parameters["limit"] : 10;
     $offset = (isset($parameters["offset"])) ? $parameters["offset"] : 0;
     $queryFilter = (isset($parameters["query"])) ? $parameters["query"] : NULL;
-    $order = (isset($parameters["order"])) ? $parameters["order"] : "DESC";
-    $orderBy = (isset($parameters["orderby"])) ? $parameters["orderby"] : "date";
+    $order = (isset($parameters["orderByDirection"])) ? $parameters["orderByDirection"] : "DESC";
+    $orderBy = (isset($parameters["orderBy"])) ? $parameters["orderBy"] : "date";
     $tax_query = [];
     list($page, $pageSize, $headWaste, $tailWaste) = getPageSize($start, $limit);
     if (!empty($filters["scalarFilters"])) {
@@ -120,8 +122,13 @@ function get_items( $request ) {
       "posts_per_page" => $pageSize,
       "paged" => $page,
       "order" => $order,
-      "orderBy" => $orderBy
+      "orderby" => $orderBy
     ];
+    // Override args for specific popular order by
+    if ($orderBy=="views") {
+      $args["meta_key"] = "ampize_views";
+      $args["orderby"] = "meta_value_num";
+    }
     if (isset($queryFilter)) $args["s"]=$queryFilter;
     $query = new WP_Query( $args );
     if (!$query->have_posts()) {
@@ -129,7 +136,9 @@ function get_items( $request ) {
     } else {
       $items = [];
       foreach ($query->posts as $post) {
-        $items[] = get_post_data($post);
+        $item = get_post_data($post);
+        $item["views"] =  intval(get_post_meta($post->ID, "ampize_views", true));
+        $items[] = $item;
       }
     }
     $results = [
@@ -158,7 +167,9 @@ function getPageSize ($start, $limit) {
 
 function get_item( $data ) {
   $post = get_post($data["id"]);
-  return get_post_data($post);
+  $result = get_post_data($post);
+  $result["relatedPosts"] = get_related_posts($post);
+  return $result;
 }
 
 function get_model ( $data ) {
@@ -183,6 +194,10 @@ function get_model ( $data ) {
                     "type" => "String",
                     "description" => "Article Description",
                     "schemaOrgProperty" => "description"
+                ],
+                "excerpt" => [
+                    "type" => "String",
+                    "description" => "Article Excerpt"
                 ],
                 "image" => [
                     "type" => "ImageURL",
@@ -212,12 +227,20 @@ function get_model ( $data ) {
                     "description" => "Date Modified",
                     "schemaOrgProperty" => "dateModified"
                 ],
+                "views" => [
+                    "type" => "String",
+                    "description" => "Article views"
+                ],
                 "tags" => [
                     "type" => "tag",
                     "multivalued" => true
                 ],
                 "categories" => [
                     "type" => "category",
+                    "multivalued" => true
+                ],
+                "relatedPosts" => [
+                    "type" => "relatedPost",
                     "multivalued" => true
                 ]
             ],
@@ -234,9 +257,19 @@ function get_model ( $data ) {
                     "tag" => [
                       "type" => "String"
                     ],
-                    "route" => [
+                    "url" => [
                       "type" => "String"
                     ]
+                ],
+                "sortKeys": [
+                    {
+                        "value" => "date",
+                        "label" => "Publication date"
+                    },
+                    {
+                        "value" => "views",
+                        "label" => "Most viewed"
+                    }
                 ]
             ],
             "singleEndpoint" => [
@@ -282,6 +315,40 @@ function get_model ( $data ) {
                     "type" => "String"
                 ]
             ]
+        ],
+        "relatedPost" => [
+          "name" => "relatedPost",
+          "fields" => [
+            "id" => [
+                "type" => "ID",
+                "description" => "Article ID",
+                "required" => true
+            ],
+            "headline" => [
+                "type" => "String",
+                "required" => true,
+                "description" => "Article Title",
+                "schemaOrgProperty" => "headline"
+            ],
+            "description" => [
+                "type" => "String",
+                "description" => "Article Description",
+                "schemaOrgProperty" => "description"
+            ],
+            "excerpt" => [
+                "type" => "String",
+                "description" => "Article Excerpt"
+            ],
+            "image" => [
+                "type" => "ImageURL",
+                "description" => "Article Image",
+                "schemaOrgProperty" => "image"
+            ],
+            "thumbnail" => [
+                "type" => "ImageURL",
+                "description" => "Article Thumbnail"
+            ]
+          ]
         ]
     ];
     return $model;
@@ -318,27 +385,53 @@ function get_navigation( $data ) {
       case "page":
         $type = "html";
         $post = get_post($page->object_id);
-        $body =  apply_filters( "the_content", $post->post_content );
+        $body = apply_filters("the_content", $post->post_content);
         break;
     }
     $results[] = [
       "id" => $page->ID,
-      "title" => $page->title,
+      "name" => $page->title,
       "description" => $page->description,
       "keywords" => "",
-      "canonicalUrl" => $page->url,
-      "urlSegment" => parse_url($page->url)["path"]."?".parse_url($page->url)["query"],
+      "url" => $page->url,
+      //"urlSegment" => parse_url($page->url)["path"]."?".parse_url($page->url)["query"],
       "isRoot" => ($page->menu_item_parent==0) ? true : false,
       "order" => $page->menu_order,
       "parentId" => $page->menu_item_parent,
-      "exludeFromMenu" => False,
+      "excludeFromMenu" => False,
       "type" => $type,
       "body" => $body,
       "itemId" => $itemid,
-      "listFilters" => $listFilters
+      //"listFilters" => $listFilters
     ];
   }
   return ["pages" => $results];
+}
+
+function get_related_posts($post) {
+  $tags = wp_get_post_tags($post->ID);
+  if ($tags) {
+    $tag_ids = array();
+    foreach($tags as $individual_tag) $tag_ids[] = $individual_tag->term_id;
+    $args=[
+      "tag__in" => $tag_ids,
+      "post__not_in" => [$post->ID],
+      "posts_per_page"=>5,
+      "caller_get_posts"=>1
+    ];
+    $query = new wp_query($args);
+    if (!$query->have_posts()) {
+      $items=null;
+    } else {
+      $items = [];
+      foreach ($query->posts as $post) {
+        $item = get_post_data($post);
+        $item["views"] =  intval(get_post_meta($post->ID, "ampize_views", true));
+        $items[] = $item;
+      }
+    }
+  }
+  return $items;
 }
 
 function get_post_thumbnail ($post) {
@@ -421,13 +514,16 @@ function get_post_data ($post) {
 
   $description = get_the_excerpt($post);
 
+  $excerpt = excerpt($post);
+
   $result = [
     "id" => $post->ID,
     "headline" => $post->post_title,
     "description" => $description,
+    "excerpt" => $excerpt,
     "image" => $image ? $image : null,
     "thumbnail" => $thumbnail ? $thumbnail : null,
-    "body" => $post->post_content,
+    "body" => apply_filters('the_content', $post->post_content),
     "authorName" => get_the_author_meta("display_name",$post->post_author),
     "datePublished" => $datePublished->format(DateTime::ISO8601),
     "dateModified" => $dateModified->format(DateTime::ISO8601),
@@ -458,15 +554,46 @@ add_action( "rest_api_init", function () {
     "methods" => "GET",
     "callback" => "get_item",
   ]);
+  register_rest_route( "ampize/v1", "/views/(?P<id>\d+)", [
+    "methods" => "GET",
+    "callback" => "post_view_counter_function",
+  ]);
 });
 
 add_action("admin_menu", "test_plugin_setup_menu");
 
+function excerpt($post) {
+  $limit = get_option("ampize_excerpt_length");
+  if (!$limit) {
+    $excerpt = get_the_excerpt($post);
+  } else {
+    $excerpt = explode(' ', get_the_excerpt($post), $limit);
+    if (count($excerpt)>=$limit) {
+      array_pop($excerpt);
+      $excerpt = implode(" ",$excerpt).' [...]';
+    } else {
+      $excerpt = implode(" ",$excerpt);
+    }
+    $excerpt = preg_replace('`[[^]]*]`','',$excerpt);
+  }
+  return $excerpt;
+}
+
+function post_view_counter_function($request) {
+  $post_id = $request['id'];
+  if ( FALSE === get_post_status( $post_id ) ) {
+    return new WP_Error( 'error_no_post', 'Not a post id', array( 'status' => 404 ) );
+  } else {
+    $current_views = get_post_meta( $post_id, 'ampize_views', true );
+    $views = ($current_views ? $current_views : 0) + 1;
+    update_post_meta( $post_id, 'ampize_views', intval($views) );
+    return $views;
+  }
+}
+
 function test_plugin_setup_menu(){
   add_menu_page( "AMPize Plugin Page", "AMPize Plugin", "manage_options", "ampize-plugin", "ampize_admin" );
 }
-
-
 
 function ampize_admin(){
   //must check that the user has the required capability
@@ -476,9 +603,9 @@ function ampize_admin(){
   }
 
   // variables for the field and option names
-  $opt_name = "ampize_token";
+  $opt_name = "ampize_excerpt_length";
   $hidden_field_name = "ampize_submit_hidden";
-  $data_field_name = "ampize_token";
+  $data_field_name = "ampize_excerpt_length";
 
   // Read in existing option value from database
   $opt_val = get_option( $opt_name );
@@ -515,7 +642,7 @@ function ampize_admin(){
 <form name="form1" method="post" action="">
 <input type="hidden" name="<?php echo $hidden_field_name; ?>" value="Y">
 
-<p><?php _e("AMPize.me Token      ", "ampize-plugin" ); ?>
+<p><?php _e("Excerpt length      ", "ampize-plugin" ); ?>
 <input type="text" name="<?php echo $data_field_name; ?>" value="<?php echo $opt_val; ?>" size="20">
 </p><hr />
 
